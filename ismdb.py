@@ -1,5 +1,9 @@
+import matplotlib
+matplotlib.use('agg')
 import gluon
 from gluon.dal import DAL,Field
+import os
+import re
 
 ismdb = DAL('sqlite://nano.db', folder = '/home/gjones/workspace/dynism/tables')
 
@@ -26,6 +30,24 @@ Observations = ismdb.define_table('observations',
                                Field('alpha','double'),
                                Field('plot_file','string')
                                )
+Timing = ismdb.define_table('timing',
+                            Field('mjd','integer'),
+                            Field('source',ismdb.sources),
+                            Field('epoch','double'),
+                            Field('ref_freq','double'),
+                            Field('instrument',ismdb.instruments),
+                            Field('res','double'),
+                            Field('err','double'),
+                            )
+Dispersion = ismdb.define_table('dispersion',
+                            Field('source',ismdb.sources),
+                            Field('epoch','double'),
+                            Field('begin','double'),
+                            Field('end','double'),
+                            Field('dm','double'),
+                            Field('err','double'),
+                            )
+
 Flags = ismdb.define_table('flags',
                         Field('mjd','integer'),
                         Field('scan','integer'),
@@ -67,6 +89,95 @@ def normalize_source(raw):
         raw = aliases[raw]
     return raw
 
+def add_all_timing(datfile='/home/gjones/nanograv_timing_2013/timing/final_solutions.dat'):
+    fh = open(datfile,'r')
+    lns = fh.readlines()
+    fh.close()
+    topdir,blah = os.path.split(datfile)
+    for ln in lns:
+        ln = ln.strip()
+        if ln[0] == '#':
+            continue
+        parts = [x for x in ln.split(' ') if len(x) > 0]
+        if len(parts) != 3:
+            print "skipping: ", ln,parts
+            continue
+        src,par,tim = parts
+        
+        par = os.path.join(topdir,src,par)
+        tim = os.path.join(topdir,src,tim)
+        print "adding",par,tim
+        add_timing(par,tim)
+    
+
+def add_timing(parfile,timfile):
+    working_dir,parbase = os.path.split(parfile)
+    blah,timbase = os.path.split(timfile)
+    os.chdir(working_dir)
+    from datatools import tempo
+    m = tempo.model(parbase)
+    t = tempo.TOAfile(timbase)
+    m.tempofit(t)
+    m.average()
+    dm,err,begin,end = m.dmxlist
+    name = normalize_source(m.PSR)
+    rows = ismdb(ismdb.sources.name == name).select()
+    if len(rows) < 1:
+        print "error! did not find source in database", name
+    sourceid = rows[0].id
+    for k in dm.keys():
+        dmf = float(dm[k])
+        errf = float(err[k])
+        beginf = float(begin[k])
+        endf = float(end[k])
+        epoch = (beginf + endf)/2.0
+        ismdb.dispersion.insert(source = sourceid, begin = beginf, end = endf, 
+                                epoch = epoch, dm = dmf, err = errf)
+        ismdb.commit()
+    avetoa = m.avetoa
+    averes = m.averes
+    aveerr = m.aveerr
+    grps = avetoa.keys()
+    instmap = {'GUPPI': ('guppi','gbt'),
+               'PUPPI': ('puppi','arecibo'),
+               'ASP' : ('asp','arecibo'),
+               'GASP':('gasp','gbt')}
+    for k in grps:
+        print k,
+        if k.find('-') < 0:
+            print "could not find an instrument for this data",name,k,"skipping"
+            continue
+        inst_name,band = k.split('-')
+        if not inst_name in instmap:
+            temp = band
+            band = inst_name
+            inst_name = temp
+        print inst_name,band
+        if not inst_name in instmap:
+            print "could not find an instrument for this data",name,k,"skipping"
+            continue
+        inst,scope = instmap[inst_name]
+        freq = m.freq[m.groups[k]].mean()
+        toas = avetoa[k]
+        res = averes[k]
+        err = aveerr[k]
+        inst_id = ismdb(ismdb.instruments.name == inst).select('id')
+        if inst_id:
+            inst_id = inst_id[0]
+        else:
+            print "inserting instrument",k
+            inst_id = ismdb.instruments.insert(name=inst,telescope=scope)
+            ismdb.commit()
+        for nn in range(len(toas)):
+            ismdb.timing.insert(mjd = int(toas[nn]),
+                                source = sourceid,
+                                epoch = float(toas[nn]),
+                                ref_freq = freq,
+                                instrument = inst_id,
+                                res = float(res[nn]),
+                                err = float(err[nn]))
+            ismdb.commit()
+
 def populate():
     import dynspec
     import glob
@@ -83,7 +194,11 @@ def populate():
     for pkl in pklglob:
         print pkl
         info = fndecode.search(pkl).groupdict()
-        ds = dynspec.unpickle(pkl)
+        try:
+            ds = dynspec.unpickle(pkl)
+        except:
+            print "failed to unpickle",pkl
+            continue
         normsource = normalize_source(ds.source)
         source_id = ismdb(ismdb.sources.name == normsource).select('id')
         if not source_id:

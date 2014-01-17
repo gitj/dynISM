@@ -32,7 +32,7 @@ def processOne(fn,done,gpus,telescope,outdir,plotdir,redo=False):
                                       info['scan'],telescope))
     outfn = os.path.join(outdir,'pkls',pklname)
     if (not redo) and (outfn in done):
-        return fn,None
+        return fn,None,pklname
     try:
     #if True:
         ds = loadDynSpecFromCycSpecScan(int(info['scan']), int(info['mjd']), 
@@ -49,9 +49,9 @@ def processOne(fn,done,gpus,telescope,outdir,plotdir,redo=False):
         canvas = FigureCanvasAgg(fig)
         canvas.print_figure(plotname)
     except Exception,e:
-        print fn,e
-        return fn,e
-    return fn,None
+        print fn,e,pklname
+        return fn,e,pklname
+    return fn,None,pklname
                              
 
 def decodeFilename(fn):
@@ -252,6 +252,12 @@ def getFilesForScan(scanno,mjd,telescope,gpus = None):
             g.sort()
             files[gpu] = g
     return files
+
+def fixIt(fn):
+    try:
+        fixCyclicDedisp(fn)
+    except Exception, e:
+        print "Failed to fix",fn, e
 
 def fixCyclicDedisp(fname, nchan=32, overwrite=False, ext='fix'):
     # copied from paul's fix_cyclic_dedisp script

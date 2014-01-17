@@ -14,6 +14,7 @@ plotdir= '/home/gjones/cs/analysis/dynspec/rfiplots'
 todo = glob.glob(os.path.join(outdir,'pkls/ds*.pkl'))
 todo.sort()
 errors = {}
+repickle=True
 def pOne(fn):
     try:
         fig = Figure(figsize=(10,12))
@@ -28,6 +29,8 @@ def pOne(fn):
         fig.suptitle(('%s @ %s %s' % (ds.source,ds.telescope,esc_fname)),size='medium')
         canvas = FigureCanvasAgg(fig)
         canvas.print_figure(plotname)
+        if repickle:
+            dynspec.pickle(fn, ds)
     except Exception, e:
         return fn,e
     return fn,None
